@@ -1,0 +1,50 @@
+# =============================================================================
+# terraform.tfvars.example — Copy this to terraform.tfvars and fill in your values
+# =============================================================================
+# HOW TO USE:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your real cluster details
+#   terraform init
+#   terraform plan
+#   terraform apply
+#
+# NEVER commit terraform.tfvars to git if it has sensitive values.
+# Add it to .gitignore.
+
+aws_region  = "us-east-1"
+environment = "dev"
+
+# Your EXISTING EKS cluster details
+cluster_name     = "my-eks-cluster"
+cluster_endpoint = "https://XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX.gr7.us-east-1.eks.amazonaws.com"
+
+# base64-encoded CA cert — get with:
+# aws eks describe-cluster --name my-eks-cluster --query 'cluster.certificateAuthority.data' --output text
+cluster_certificate_authority_data = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t..."
+
+# Your existing managed node group name — Karpenter controller pods pin here
+existing_node_group_name = "my-eks-cluster-node-group"
+
+# Karpenter version (pin this! check https://github.com/aws-karpenter/karpenter/releases)
+karpenter_version = "1.0.6"
+
+# AZs must match your VPC subnet AZs
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# On-demand NodePool — stable workloads (databases, critical APIs)
+on_demand_instance_families = ["t3", "t3a", "m5"]
+on_demand_instance_sizes    = ["small", "medium", "large"]
+on_demand_cpu_limit         = 50
+
+# Spot NodePool — stateless/batch workloads (web servers, batch jobs)
+spot_instance_families = ["t3", "t3a", "m5", "m5a", "c5"]
+spot_instance_sizes    = ["small", "medium", "large", "xlarge"]
+spot_cpu_limit         = 100
+
+node_volume_size_gb = 20
+
+tags = {
+  Team        = "platform"
+  Project     = "karpenter-autoscaling"
+  CostCenter  = "engineering"
+}

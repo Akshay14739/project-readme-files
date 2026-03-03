@@ -1,0 +1,74 @@
+# =============================================================================
+# k8s-manifests/ec2nodeclass.yaml
+# =============================================================================
+# WHAT THIS IS:
+#   An EC2NodeClass is a Karpenter CRD (Custom Resource Definition).
+#   It defines HOW to build EC2 instances — the "blueprint layer".
+#   Node pools reference this to know WHAT AMI, subnets, SGs, and disk config to use.
+#
+# TEAM NOTE:
+#   Replace placeholders:
+#     <YOUR_CLUSTER_NAME>     → your actual EKS cluster name
+#     <KARPENTER_NODE_ROLE>   → output from Terraform: karpenter_node_role_name
+#
+# Verify after apply: kubectl describe ec2nodeclass default-ec2nodeclass
+
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default-ec2nodeclass
+spec:
+  # AMI family: Amazon Linux 2023 is the current recommended EKS-optimized AMI.
+  # AL2023 has better security defaults and long-term support vs Amazon Linux 2.
+  amiFamily: AL2023
+
+  # "@ latest" = always use the newest AL2023 EKS-optimized AMI automatically.
+  # No manual AMI ID management needed — Karpenter handles updates.
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  # Node IAM Role: the IAM role that Karpenter attaches to EC2 instances it creates.
+  # This is the role from iam_node.tf (Step 2 of the Terraform).
+  # Value comes from Terraform output: karpenter_node_role_name
+  nodeIAMRole: <KARPENTER_NODE_ROLE>
+
+  # Subnet selection: which subnets can Karpenter use to launch nodes?
+  # Uses TAG-BASED discovery (not hard-coded subnet IDs).
+  # Both conditions must match:
+  #   kubernetes.io/role/internal-elb=1  → selects PRIVATE subnets only (security best practice)
+  #   karpenter.sh/discovery=<cluster>   → scopes to YOUR cluster's subnets only
+  #
+  # IMPORTANT: Your subnets must have these tags!
+  # The transcript explains: changing tag from "shared" to "owned" is required for Karpenter.
+  subnetSelectorTerms:
+    - tags:
+        kubernetes.io/role/internal-elb: "1"
+        karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+
+  # Security group selection: which SGs to attach to Karpenter nodes?
+  # Matches the EKS-managed cluster security group (created when you made the EKS cluster).
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+
+  # Tags added to every EC2 instance Karpenter launches.
+  # Karpenter uses this tag internally to identify nodes it owns.
+  # Also useful for cost allocation and filtering in the AWS console.
+  tags:
+    karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+    ManagedBy: Karpenter
+
+  # Root EBS volume configuration
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 20Gi        # Increase for workloads with large container images
+        volumeType: gp3          # gp3 is cheaper and faster than gp2
+        encrypted: true          # Always encrypt in production
+        deleteOnTermination: true  # No orphaned volumes when node terminates
+
+  # EC2 Instance Metadata Service settings (security hardening)
+  metadataOptions:
+    httpTokens: required           # Forces IMDSv2 (more secure than v1)
+    httpPutResponseHopLimit: 2     # Allows pods to access IMDS; prevents SSRF attacks
+    httpEndpoint: enabled

@@ -1,0 +1,49 @@
+# ==============================================================================
+# ec2nodeclass.yaml — Blueprint for how Karpenter builds EC2 nodes
+# ==============================================================================
+# BEFORE APPLYING: replace both placeholder values below:
+#   <YOUR_CLUSTER_NAME>     → your EKS cluster name (same as cluster_name in tfvars)
+#   <KARPENTER_NODE_ROLE>   → paste the value from `terraform output karpenter_node_role_name`
+#
+# Apply:  kubectl apply -f ec2nodeclass.yaml
+# Verify: kubectl get ec2nodeclass && kubectl describe ec2nodeclass default-ec2nodeclass
+# ==============================================================================
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default-ec2nodeclass
+spec:
+  amiFamily: AL2023
+  amiSelectorTerms:
+    - alias: al2023@latest          # Always pulls the newest EKS-optimised AMI automatically
+
+  nodeIAMRole: <KARPENTER_NODE_ROLE>  # ← paste terraform output karpenter_node_role_name
+
+  # Private subnets only — Karpenter discovers them by tag, not by hard-coded ID
+  subnetSelectorTerms:
+    - tags:
+        kubernetes.io/role/internal-elb: "1"
+        karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+
+  # EKS cluster security group — discovered by tag
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+
+  # Tag every EC2 instance Karpenter launches (used internally for ownership tracking)
+  tags:
+    karpenter.sh/discovery: <YOUR_CLUSTER_NAME>
+    ManagedBy: Karpenter
+
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 20Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+
+  metadataOptions:
+    httpTokens: required          # Enforces IMDSv2 (more secure)
+    httpPutResponseHopLimit: 2    # Allows pods to reach IMDS; prevents SSRF
+    httpEndpoint: enabled

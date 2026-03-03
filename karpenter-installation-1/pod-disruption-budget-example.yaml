@@ -1,0 +1,83 @@
+# =============================================================================
+# k8s-manifests/pod-disruption-budget-example.yaml
+# =============================================================================
+# WHAT IS A PodDisruptionBudget (PDB)?
+#   A PDB tells Kubernetes: "when disrupting pods (node drain, rolling update, etc.),
+#   you MUST keep at least N pods running at all times."
+#
+# WHY IT MATTERS FOR KARPENTER:
+#   Without a PDB: When Karpenter drains a spot node, it could evict ALL 5 pods
+#   at once. Your app gets 30–40 seconds of downtime.
+#
+#   With a PDB (minAvailable: 3): Karpenter can only evict 2 pods at a time.
+#   It waits for replacement pods to be Running before evicting the next batch.
+#   Result: ZERO downtime.
+#
+# The transcript demonstrates this with 6 stages of spot interruption handling:
+#   - Stage 3: First wave — 2 pods evicted (PDB allows max 2)
+#   - Stage 4: Second wave — remaining 3 pods evicted after first 2 are running
+#
+# RULE: Every production Deployment on spot nodes MUST have a PDB.
+#
+# Apply: kubectl apply -f pod-disruption-budget-example.yaml
+# Verify: kubectl get pdb
+
+---
+# Example PDB for a "my-app" deployment with 5 replicas on spot nodes
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-app-pdb
+  namespace: default
+spec:
+  # minAvailable: minimum number of pods that must be Running at ANY time
+  # With 5 replicas and minAvailable: 3, Karpenter can evict at most 2 at once.
+  # You can also use maxUnavailable instead: maxUnavailable: 2
+  minAvailable: 3
+
+  # selector MUST match the labels of the pods you want to protect.
+  # Use the SAME labels as in your Deployment's spec.template.metadata.labels
+  selector:
+    matchLabels:
+      app: my-app   # <-- match your Deployment's pod labels
+
+---
+# Example Deployment that uses the PDB above (spot-targeted)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: my-app    # Must match PDB selector
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      # Pin this deployment to Karpenter's SPOT nodes
+      nodeSelector:
+        karpenter.sh/capacity-type: spot
+
+      # Give the app 30 seconds to finish in-flight requests before shutdown
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: my-app
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+
+          # IMPORTANT: Always define resource requests for Karpenter to work correctly.
+          # Karpenter reads these to calculate the RIGHT node size.
+          # Without requests, Karpenter cannot make bin-packing decisions.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

@@ -1,0 +1,92 @@
+# =============================================================================
+# k8s-manifests/nodepool-ondemand.yaml
+# =============================================================================
+# WHAT THIS IS:
+#   A NodePool defines WHAT kind of nodes Karpenter is allowed to create.
+#   Think of it as "the menu of options" for the Karpenter controller.
+#
+# USE CASE FOR THIS POOL:
+#   Stable, guaranteed capacity for:
+#     - Production databases
+#     - Critical API servers
+#     - Stateful applications
+#     - Anything that CANNOT tolerate interruptions
+#
+# HOW PODS GET SCHEDULED HERE:
+#   Pods must include this in their spec:
+#     nodeSelector:
+#       karpenter.sh/capacity-type: on-demand
+#
+# Verify: kubectl get nodepools
+# Describe: kubectl describe nodepool on-demand-nodepool
+
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: on-demand-nodepool
+spec:
+  template:
+    spec:
+      # Link to the EC2NodeClass blueprint (how to build the node)
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default-ec2nodeclass
+
+      # Requirements = the filter Karpenter uses when picking EC2 instance types.
+      # Multiple requirements are AND-ed together.
+      # Docs: https://karpenter.sh/docs/concepts/nodepools/#spectemplatespecrequirements
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]           # x86_64 architecture
+
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+
+        # THE KEY SETTING: on-demand = no interruptions, guaranteed capacity
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+
+        # Instance families Karpenter can choose from.
+        # Adjust based on your workload profiles and cost targets.
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.small
+            - t3.medium
+            - t3.large
+            - t3a.small
+            - t3a.medium
+            - t3a.large
+            - m5.large
+            - m5.xlarge
+
+        # AZs where nodes can be launched.
+        # MUST match your VPC subnet AZs.
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a   # Update to match your availability zones
+            - us-east-1b
+            - us-east-1c
+
+  # Hard resource limits across ALL nodes in this pool.
+  # Safety net to prevent runaway scaling and unexpected AWS bills.
+  # Once hit, Karpenter stops provisioning new nodes until existing nodes free up.
+  limits:
+    cpu: "50"           # Total vCPUs across all on-demand Karpenter nodes
+    memory: 200Gi       # Total memory across all on-demand Karpenter nodes
+
+  # Disruption settings: how Karpenter manages the lifecycle of nodes
+  disruption:
+    # consolidationPolicy options:
+    #   WhenEmpty        — only remove completely empty nodes
+    #   WhenEmptyOrUnderutilized — also move pods to pack nodes tighter (saves cost)
+    consolidationPolicy: WhenEmptyOrUnderutilized
+
+    # Wait 30s before consolidating — prevents rapid scale-up/scale-down thrashing
+    # The transcript explains: "30s is a good number to prevent thrashing"
+    consolidateAfter: 30s

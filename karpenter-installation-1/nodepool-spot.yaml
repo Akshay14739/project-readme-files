@@ -1,0 +1,95 @@
+# =============================================================================
+# k8s-manifests/nodepool-spot.yaml
+# =============================================================================
+# WHAT THIS IS:
+#   Spot NodePool for cost-optimized, interruption-tolerant workloads.
+#   Spot instances are 50–90% cheaper than on-demand, but AWS can reclaim
+#   them with a 2-minute warning.
+#
+# USE CASE FOR THIS POOL:
+#   - Stateless web servers
+#   - Batch processing / data pipelines
+#   - CI/CD workers
+#   - Test/staging workloads
+#   - Anything with retry logic or graceful shutdown
+#
+# KEY DIFFERENCE FROM ON-DEMAND POOL:
+#   1. capacity-type = spot  (instead of on-demand)
+#   2. MORE instance families = better spot availability fallback
+#   3. More aggressive consolidation settings
+#
+# HOW PODS GET SCHEDULED HERE:
+#   Pods must include:
+#     nodeSelector:
+#       karpenter.sh/capacity-type: spot
+
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: spot-nodepool
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default-ec2nodeclass
+
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+
+        # THE KEY SETTING: spot capacity
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+
+        # MORE families than on-demand pool!
+        # Spot availability varies by instance type and AZ.
+        # If t3 spot is unavailable, Karpenter falls back to t3a → m5 → c5 → etc.
+        # The transcript: "If T3 spot capacity is unavailable, Karpenter will pick T3a"
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.small
+            - t3.medium
+            - t3.large
+            - t3.xlarge
+            - t3a.small
+            - t3a.medium
+            - t3a.large
+            - t3a.xlarge
+            - m5.large
+            - m5.xlarge
+            - m5a.large
+            - m5a.xlarge
+            - c5.large
+            - c5.xlarge
+
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a   # Update to match your AZs
+            - us-east-1b
+            - us-east-1c
+
+  limits:
+    cpu: "100"       # Higher limit for spot — spot workloads often burst more
+    memory: 400Gi
+
+  disruption:
+    # Same consolidation policy but spot can be more aggressive
+    # because workloads should be fault-tolerant by design
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
+
+    # Budget: allows disrupting up to 20% of spot nodes at once.
+    # Prevents all spot nodes from being replaced simultaneously.
+    # Adjust based on your workload tolerance for disruption.
+    budgets:
+      - nodes: "20%"    # Max 20% of nodes can be disrupted at the same time

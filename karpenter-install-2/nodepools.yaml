@@ -1,0 +1,114 @@
+# ==============================================================================
+# nodepools.yaml — On-demand and Spot NodePool definitions
+# ==============================================================================
+# Apply after ec2nodeclass.yaml:
+#   kubectl apply -f nodepools.yaml
+#   kubectl get nodepools
+#
+# SCHEDULING PODS:
+#   On-demand → add this to your pod/deployment spec:
+#     nodeSelector:
+#       karpenter.sh/capacity-type: on-demand
+#
+#   Spot      → add this to your pod/deployment spec:
+#     nodeSelector:
+#       karpenter.sh/capacity-type: spot
+# ==============================================================================
+
+---
+# ON-DEMAND NODEPOOL — stable capacity for critical/stateful workloads
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: on-demand-nodepool
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default-ec2nodeclass
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.small
+            - t3.medium
+            - t3.large
+            - t3a.small
+            - t3a.medium
+            - t3a.large
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a        # ← update to match your AZs
+            - us-east-1b
+            - us-east-1c
+  limits:
+    cpu: "50"       # Hard ceiling — Karpenter stops provisioning once reached
+    memory: 200Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s   # Wait 30s before consolidating to prevent thrashing
+
+---
+# SPOT NODEPOOL — cost-optimised for stateless/batch/fault-tolerant workloads
+# Spot is 50–90% cheaper but can be reclaimed with 2-minute warning.
+# Use with PodDisruptionBudgets for zero-downtime spot handling.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: spot-nodepool
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default-ec2nodeclass
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:                # More families = better spot availability fallback
+            - t3.small
+            - t3.medium
+            - t3.large
+            - t3a.small
+            - t3a.medium
+            - t3a.large
+            - m5.large
+            - m5.xlarge
+            - c5.large
+            - c5.xlarge
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a        # ← update to match your AZs
+            - us-east-1b
+            - us-east-1c
+  limits:
+    cpu: "100"
+    memory: 400Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
+    budgets:
+      - nodes: "20%"    # Max 20% of spot nodes disrupted simultaneously
